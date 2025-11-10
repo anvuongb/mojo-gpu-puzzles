@@ -26,8 +26,33 @@ fn conv_1d_simple[
 ):
     global_i = block_dim.x * block_idx.x + thread_idx.x
     local_i = thread_idx.x
-    # FILL ME IN (roughly 14 lines)
 
+    shareda = LayoutTensor[
+        dtype,
+        Layout.row_major(SIZE),
+        MutAnyOrigin,
+        address_space=AddressSpace.SHARED,
+    ].stack_allocation()
+    sharedb = LayoutTensor[
+        dtype,
+        Layout.row_major(CONV),
+        MutAnyOrigin,
+        address_space=AddressSpace.SHARED,
+    ].stack_allocation()
+
+    if global_i < SIZE:
+        shareda[local_i] = a[global_i]
+    if global_i < CONV:
+        sharedb[local_i] = a[global_i]
+    barrier()
+
+    if global_i < SIZE:
+        var csum: output.element_type = 0
+        @parameter
+        for j in range(CONV):
+            if global_i+j<SIZE:
+                csum += shareda[global_i+j]*sharedb[j]
+        output[global_i]=csum
 
 # ANCHOR_END: conv_1d_simple
 
@@ -51,6 +76,47 @@ fn conv_1d_block_boundary[
     global_i = block_dim.x * block_idx.x + thread_idx.x
     local_i = thread_idx.x
     # FILL ME IN (roughly 18 lines)
+    shared_a = LayoutTensor[
+        dtype,
+        Layout.row_major(TPB+CONV_2-1),
+        MutAnyOrigin,
+        address_space=AddressSpace.SHARED,
+    ].stack_allocation()
+    shared_b = LayoutTensor[
+        dtype,
+        Layout.row_major(CONV_2),
+        MutAnyOrigin,
+        address_space=AddressSpace.SHARED,
+    ].stack_allocation()
+
+    # load shared_a
+    if global_i < SIZE_2:
+        shared_a[local_i] = a[global_i]
+    else:
+        shared_a[local_i] = 0
+    
+    # load values needed at block boundary
+    # thus use local idx
+    if local_i < CONV_2-1:
+        if TPB + global_i < SIZE_2:
+            shared_a[TPB + local_i] = a[TPB + global_i]
+        else:
+            shared_a[TPB + local_i] = 0
+
+    # load shared_b
+    if local_i < CONV_2:
+        shared_b[local_i] = b[local_i]
+    
+    barrier()
+
+    if global_i < SIZE_2:
+        var csum: output.element_type = 0
+        @parameter
+        for j in range(CONV_2):
+            if global_i+j < SIZE_2:
+                csum += shared_a[local_i+j]*shared_b[j]
+        output[global_i] = csum
+        
 
 
 # ANCHOR_END: conv_1d_block_boundary
